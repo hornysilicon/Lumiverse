@@ -236,7 +236,6 @@ export default function ConnectionManager() {
     }
   }, [activeCharacterId, activeCharacterConnectionId, setActiveCharacterConnection])
 
-
   if (loading) {
     return <div className={styles.loading}>{t('connectionManager.loading')}</div>
   }

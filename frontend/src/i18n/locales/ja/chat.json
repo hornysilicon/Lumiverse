@@ -284,7 +284,7 @@
     "spindleFailed": "{{phase}}中に{{name}}が失敗しました。",
     "spindleActive": "{{name}}は{{phase}}です",
     "boundConnectionChat": "このチャットに固定された接続: {{name}}",
-    "boundConnectionChar": "このキャラに固定された接続: {{name}}"
+    "boundConnectionChar": "このキャラに結び付けられた接続: {{name}}"
   },
   "council": {
     "label": "協議会",
