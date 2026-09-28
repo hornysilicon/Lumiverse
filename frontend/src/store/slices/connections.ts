@@ -24,6 +24,13 @@ export function shouldPersistActiveProfileId(reason: ActiveProfileSwitchReason):
 // user-scoped reset — see resetCharacterConnectionBindHydration.
 let hydratedCharacterBindFor: string | null = null
 
+// Monotonic sequence bumped by every activeCharacterConnectionId write made
+// through setActiveCharacterConnection (toggle UI, WS push). Hydration
+// captures the sequence when its GET leaves and discards a response that
+// resolves after a newer write, so a slow fetch can't clobber a fresher
+// local/server write for the same character.
+let characterBindWriteSeq = 0
+
 /** Reset the character-bind hydration memo (logout / user switch). */
 export function resetCharacterConnectionBindHydration(): void {
   hydratedCharacterBindFor = null
@@ -98,7 +105,10 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
     }
   },
 
-  setActiveCharacterConnection: (id) => set({ activeCharacterConnectionId: id }),
+  setActiveCharacterConnection: (id) => {
+    characterBindWriteSeq += 1
+    set({ activeCharacterConnectionId: id })
+  },
 
   hydrateActiveCharacterConnection: (characterId, opts) => {
     if (!characterId) {
@@ -112,9 +122,13 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
     // Switching characters: drop the previous character's bind immediately so
     // a slow (or failed) fetch can't present it as the new character's.
     if (previous !== characterId) set({ activeCharacterConnectionId: null })
+    const writeSeqAtFetch = characterBindWriteSeq
     characterConnectionBindsApi.get(characterId)
       .then((result) => {
         if (get().activeCharacterId !== characterId) return
+        // A write landed while the GET was in flight — it is fresher than
+        // this response, so don't clobber it.
+        if (characterBindWriteSeq !== writeSeqAtFetch) return
         set({ activeCharacterConnectionId: result.connection_id })
       })
       .catch((err) => {
@@ -122,7 +136,7 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
         // 404 = unknown character, i.e. no binding. Other failures keep the
         // current value but clear the memo so a later attempt retries.
         if (err instanceof ApiError && err.status === 404) {
-          set({ activeCharacterConnectionId: null })
+          if (characterBindWriteSeq === writeSeqAtFetch) set({ activeCharacterConnectionId: null })
           return
         }
         hydratedCharacterBindFor = null

@@ -6,6 +6,10 @@ import type { ConnectionProfile } from '@/types/api'
 
 const patchMetadataCalls: Array<[string, Record<string, unknown>]> = []
 const bindPutCalls: Array<[string, string | null]> = []
+// Optional gates holding the next patchMetadata / put in flight so tests can
+// interleave an active chat/character switch while the request is pending.
+let holdPatchMetadataWith: ((release: () => void) => void) | null = null
+let holdBindPutWith: ((release: () => void) => void) | null = null
 
 function profile(id: string): ConnectionProfile {
   return {
@@ -91,10 +95,17 @@ mock.module('@/api/listAllConnections', () => ({
 }))
 mock.module('@/api/chats', () => ({
   chatsApi: {
-    // Echo the patch back as the merged metadata, like the server does.
+    // Behaves like the server's PATCH /chats/:id/metadata: atomic merge into
+    // the current chat metadata, with `null` sentinels deleting the key.
     patchMetadata: async (chatId: string, partial: Record<string, unknown>) => {
       patchMetadataCalls.push([chatId, partial])
-      return { id: chatId, metadata: { ...partial } }
+      if (holdPatchMetadataWith) await new Promise<void>((resolve) => { holdPatchMetadataWith!(() => resolve()) })
+      const metadata: Record<string, unknown> = { ...state.activeChatMetadata }
+      for (const [key, value] of Object.entries(partial)) {
+        if (value === null) delete metadata[key]
+        else metadata[key] = value
+      }
+      return { id: chatId, metadata }
     },
   },
   messagesApi: {},
@@ -104,6 +115,7 @@ mock.module('@/api/character-connection-binds', () => ({
     get: async () => ({ connection_id: null }),
     put: async (characterId: string, connectionId: string | null) => {
       bindPutCalls.push([characterId, connectionId])
+      if (holdBindPutWith) await new Promise<void>((resolve) => { holdBindPutWith!(() => resolve()) })
       return { connection_id: connectionId }
     },
   },
@@ -179,6 +191,8 @@ async function openMenu() {
 afterEach(async () => {
   patchMetadataCalls.length = 0
   bindPutCalls.length = 0
+  holdPatchMetadataWith = null
+  holdBindPutWith = null
   state.activeProfileId = 'alpha'
   state.profiles = [profile('alpha'), profile('beta')]
   state.activeChatId = 'chat-1'
@@ -186,6 +200,7 @@ afterEach(async () => {
   state.activeChatMetadata = null
   state.activeCharacterId = 'char-1'
   state.activeCharacterConnectionId = null
+  state.characters = [{ id: 'char-1', name: 'Hero' }]
   await act(async () => {
     root.render(<div />)
   })
@@ -211,7 +226,10 @@ describe('ConnectionManager bind actions', () => {
     // The pinned model must always be cleared together with the pin so a stale
     // model from a previously pinned connection can never leak onto the new pin.
     expect(patchMetadataCalls).toEqual([['chat-1', { connection_profile_id: 'alpha', connection_model: null }]])
-    expect(state.activeChatMetadata).toEqual({ connection_profile_id: 'alpha', connection_model: null })
+    // The server deletes nulled keys — the merged metadata must not carry a
+    // lingering `connection_model: null` entry.
+    expect(state.activeChatMetadata).toEqual({ connection_profile_id: 'alpha' })
+    expect(Object.prototype.hasOwnProperty.call(state.activeChatMetadata, 'connection_model')).toBe(false)
   })
 
   test('binds the character via the binds API and updates the store', async () => {
@@ -248,12 +266,54 @@ describe('ConnectionManager bind actions', () => {
       unbindChat!.click()
     })
     expect(patchMetadataCalls).toEqual([['chat-1', { connection_profile_id: null, connection_model: null }]])
+    expect(state.activeChatMetadata).toEqual({})
 
     await openMenu()
     await act(async () => {
       menuItem('connectionItem.unbindFromChar:Hero')!.click()
     })
     expect(bindPutCalls).toEqual([['char-1', null]])
+    expect(state.activeCharacterConnectionId).toBeNull()
+  })
+
+  test('a chat switch while the bind PATCH is in flight drops the stale response', async () => {
+    let releasePatch!: () => void
+    holdPatchMetadataWith = (release) => { releasePatch = release }
+    await act(async () => {
+      root.render(<ConnectionManager />)
+    })
+    await openMenu()
+
+    await act(async () => {
+      menuItem('connectionItem.bindToChat:My Chat')!.click()
+    })
+    // The active chat moves while the PATCH is still pending — its response
+    // belongs to the old chat and must not be written into the new slot.
+    state.activeChatId = 'chat-2'
+    state.activeChatName = 'Other Chat'
+    await act(async () => {
+      releasePatch()
+    })
+    expect(patchMetadataCalls).toEqual([['chat-1', { connection_profile_id: 'alpha', connection_model: null }]])
+    expect(state.activeChatMetadata).toBeNull()
+  })
+
+  test('a character switch while the bind PUT is in flight drops the stale write', async () => {
+    let releasePut!: () => void
+    holdBindPutWith = (release) => { releasePut = release }
+    await act(async () => {
+      root.render(<ConnectionManager />)
+    })
+    await openMenu()
+
+    await act(async () => {
+      menuItem('connectionItem.bindToChar:Hero')!.click()
+    })
+    state.activeCharacterId = 'char-2'
+    await act(async () => {
+      releasePut()
+    })
+    expect(bindPutCalls).toEqual([['char-1', 'alpha']])
     expect(state.activeCharacterConnectionId).toBeNull()
   })
 
@@ -282,5 +342,23 @@ describe('ConnectionManager bind actions', () => {
     charItem!.click()
     expect(patchMetadataCalls).toEqual([])
     expect(bindPutCalls).toEqual([])
+  })
+
+  test('bound items fall back to the no-target label when the target name is unknown', async () => {
+    // Bound but the display name has not loaded yet — the label must not
+    // render as "Unbind … — " with a dangling separator.
+    state.activeChatMetadata = { connection_profile_id: 'alpha' }
+    state.activeChatName = null
+    state.activeCharacterConnectionId = 'alpha'
+    state.characters = []
+    await act(async () => {
+      root.render(<ConnectionManager />)
+    })
+    await openMenu()
+
+    expect(menuItem('connectionItem.bindToChatNoTarget')).not.toBeNull()
+    expect(menuItem('connectionItem.bindToCharNoTarget')).not.toBeNull()
+    expect(document.body.textContent).not.toContain('unbindFromChat:')
+    expect(document.body.textContent).not.toContain('unbindFromChar:')
   })
 })

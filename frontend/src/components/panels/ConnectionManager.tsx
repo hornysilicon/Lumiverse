@@ -213,6 +213,9 @@ export default function ConnectionManager() {
         // leak onto the new pin (the server applies it per pinned connection).
         connection_model: null,
       })
+      // The await can span a chat switch — chat A's response must never be
+      // written into chat B's active-metadata slot.
+      if (useStore.getState().activeChatId !== activeChatId) return
       setActiveChatMetadata(updated.metadata ?? null)
     } catch (err) {
       console.error('[ConnectionManager] Failed to toggle chat connection bind:', err)
@@ -224,6 +227,9 @@ export default function ConnectionManager() {
     const bound = activeCharacterConnectionId === profile.id
     try {
       await characterConnectionBindsApi.put(activeCharacterId, bound ? null : profile.id)
+      // Same staleness guard as the chat bind: the character may have changed
+      // while the PUT was in flight.
+      if (useStore.getState().activeCharacterId !== activeCharacterId) return
       setActiveCharacterConnection(bound ? null : profile.id)
     } catch (err) {
       console.error('[ConnectionManager] Failed to toggle character connection bind:', err)

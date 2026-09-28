@@ -271,13 +271,16 @@ export default function ConnectionItem({
     ? formatNanoGptCachingSummary(profile.metadata?.nanogpt_caching)
     : null
   const cachingSummary = anthropicCachingSummary ?? nanogptCachingSummary
+  // When bound but the target's name is not (yet) known, fall back to the
+  // no-target label rather than rendering "Unbind … — " with a dangling
+  // separator.
   const chatBindLabel = chatBound
-    ? t('connectionItem.unbindFromChat', { name: chatBindName ?? '' })
+    ? (chatBindName ? t('connectionItem.unbindFromChat', { name: chatBindName }) : t('connectionItem.bindToChatNoTarget'))
     : chatBindName
       ? t('connectionItem.bindToChat', { name: chatBindName })
       : t('connectionItem.bindToChatNoTarget')
   const charBindLabel = charBound
-    ? t('connectionItem.unbindFromChar', { name: charBindName ?? '' })
+    ? (charBindName ? t('connectionItem.unbindFromChar', { name: charBindName }) : t('connectionItem.bindToCharNoTarget'))
     : charBindName
       ? t('connectionItem.bindToChar', { name: charBindName })
       : t('connectionItem.bindToCharNoTarget')

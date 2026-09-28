@@ -41,11 +41,19 @@ mock.module('@/store/slices/settings', settingsSliceExports)
 
 const bindGetCalls: string[] = []
 let nextBindResult: { connection_id: string | null } | Error = { connection_id: null }
+// Hold the next GET in flight until the test releases it — used to interleave
+// a write while a hydration fetch is pending.
+let holdNextBindGet = false
+let resolveHeldBindGet: (() => void) | null = null
 
 mock.module('@/api/character-connection-binds', () => ({
   characterConnectionBindsApi: {
     get: async (characterId: string) => {
       bindGetCalls.push(characterId)
+      if (holdNextBindGet) {
+        holdNextBindGet = false
+        await new Promise<void>((resolve) => { resolveHeldBindGet = resolve })
+      }
       if (nextBindResult instanceof Error) throw nextBindResult
       return nextBindResult
     },
@@ -94,6 +102,8 @@ async function flush() {
 afterEach(() => {
   bindGetCalls.length = 0
   nextBindResult = { connection_id: null }
+  holdNextBindGet = false
+  resolveHeldBindGet = null
   resetSettingsPersistence()
   resetCharacterConnectionBindHydration()
 })
@@ -200,5 +210,48 @@ describe('activeCharacterConnectionId hydration', () => {
     expect(app.activeCharacterConnectionId).toBe('alpha')
     app.setActiveCharacterConnection(null)
     expect(app.activeCharacterConnectionId).toBeNull()
+  })
+
+  test('a write landing while the GET is in flight is not clobbered by its response', async () => {
+    const app = store()
+    app.activeCharacterId = 'char-1'
+    holdNextBindGet = true
+    nextBindResult = { connection_id: 'alpha' }
+
+    app.hydrateActiveCharacterConnection('char-1')
+    await flush()
+    // The GET is still pending when a WS/local write lands for the same
+    // character — the write is fresher and must win over the response.
+    app.setActiveCharacterConnection('omega')
+    expect(app.activeCharacterConnectionId).toBe('omega')
+
+    resolveHeldBindGet!()
+    await flush()
+    expect(app.activeCharacterConnectionId).toBe('omega')
+  })
+
+  test('a write landing while a 404 GET is in flight is not reset to null', async () => {
+    const app = store()
+    app.activeCharacterId = 'char-1'
+    holdNextBindGet = true
+    nextBindResult = new ApiError(404, 'Not Found')
+
+    app.hydrateActiveCharacterConnection('char-1')
+    await flush()
+    app.setActiveCharacterConnection('omega')
+
+    resolveHeldBindGet!()
+    await flush()
+    expect(app.activeCharacterConnectionId).toBe('omega')
+  })
+
+  test('a write-free GET still hydrates normally (sequence guard does not over-fire)', async () => {
+    const app = store()
+    app.activeCharacterId = 'char-1'
+    nextBindResult = { connection_id: 'alpha' }
+
+    app.hydrateActiveCharacterConnection('char-1')
+    await flush()
+    expect(app.activeCharacterConnectionId).toBe('alpha')
   })
 })
