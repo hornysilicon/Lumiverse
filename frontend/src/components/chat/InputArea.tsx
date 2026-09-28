@@ -3739,7 +3739,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
               {connectionOverrideSource !== null && effectiveConnectionProfile && (
                 <div className={styles.popBindHint}>
-                  {t('quickMenu.connectionBindHint', { name: effectiveConnectionProfile.name })}
+                  {connectionOverrideSource === 'character'
+                    ? t('quickMenu.connectionBindHintCharacter', { name: effectiveConnectionProfile.name })
+                    : t('quickMenu.connectionBindHint', { name: effectiveConnectionProfile.name })}
                 </div>
               )}
               {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}

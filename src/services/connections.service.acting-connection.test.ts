@@ -123,11 +123,12 @@ function seedProfile(input: {
   model?: string;
   is_default?: boolean;
   has_api_key?: boolean;
+  metadata?: Record<string, unknown>;
 }): void {
   getDb().query(
     `INSERT INTO connection_profiles
        (id, name, provider, api_url, model, preset_id, is_default, metadata, created_at, updated_at, has_api_key, user_id)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, '{}', 1, 1, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1, 1, ?, ?)`,
   ).run(
     input.id,
     input.name ?? input.id,
@@ -135,6 +136,7 @@ function seedProfile(input: {
     "http://127.0.0.1:1234/v1",
     input.model ?? `${input.id}-model`,
     input.is_default ? 1 : 0,
+    JSON.stringify(input.metadata ?? {}),
     input.has_api_key ? 1 : 0,
     USER,
   );
@@ -572,6 +574,120 @@ describe("resolveEditAndSendConnectionId — the character bind rung", () => {
     seedLadder();
     seedCharacterBind("bound");
     expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {})).toBe("active");
+  });
+});
+
+// ── Character bind wiring — the real code paths forward chat.character_id ──
+
+/**
+ * The unit tests above exercise the RESOLVERS with an explicitly passed
+ * `characterId`. These tests pin the wiring one level up: the entry points
+ * (`startGeneration`, `dryRunGeneration`) actually forward the CHAT's
+ * `character_id` into the resolver, so a seeded character bind changes the
+ * connection a real generation runs on — not just what the resolver returns
+ * when handed the id by hand.
+ */
+describe("character bind wiring — startGeneration and dryRunGeneration forward chat.character_id", () => {
+  function seedBindFixture(chatId: string): void {
+    // Keyless `custom` profiles so the credential preflight is not what these
+    // tests exercise; the char-bind target must differ from the active
+    // profile for the assertion to be meaningful.
+    seedProfile({ id: "wiring-bound", model: "model-bound" });
+    seedProfile({ id: "wiring-active", model: "model-active" });
+    seedSetting("activeProfileId", "wiring-active");
+    seedCharacterBind("wiring-bound");
+    // No `connection_profile_id` pin in the metadata: the character bind must
+    // win on its own, purely via `chats.character_id` → resolver opts.
+    seedChat(chatId, { temporary: true, no_preset: true });
+    seedMessage(`${chatId}-user`, chatId, 0, true);
+  }
+
+  test("startGeneration resolves a character bind into the generation input", async () => {
+    seedBindFixture("wiring-start");
+    stubGenerationSurroundings();
+
+    const input = {
+      userId: USER,
+      chat_id: "wiring-start",
+      generationId: "gen-wiring-start",
+      generation_type: "normal" as const,
+    };
+    await generateSvc.startGeneration(input).catch(() => { /* assembly is stubbed out */ });
+
+    expect((input as { connection_id?: string }).connection_id).toBe("wiring-bound");
+    // The connection really reached pool registration, not just the input bag.
+    expect(pool.getPoolEntry("gen-wiring-start")?.model).toBe("model-bound");
+  });
+
+  test("dryRunGeneration resolves the same character bind into the dry-run input", async () => {
+    seedBindFixture("wiring-dry");
+    stubGenerationSurroundings();
+
+    const input = {
+      userId: USER,
+      chat_id: "wiring-dry",
+      generation_type: "normal" as const,
+    };
+    await generateSvc.dryRunGeneration(input).catch(() => {
+      /* prompt assembly beyond resolution is not what this test pins */
+    });
+
+    expect((input as { connection_id?: string }).connection_id).toBe("wiring-bound");
+  });
+});
+
+// ── Character bind + model roulette — commit stable, spin at generation ─────
+
+/**
+ * Roulette semantics under a character bind mirror the chat-pin precedent:
+ * `resolveEditAndSendConnectionId` validates with `getConnection` (NOT
+ * `resolveConnection`), so a bind pointing at a `model_roulette` profile
+ * commits the roulette's OWN stable id on `generation_outbox.connection_id` —
+ * never a spun member, which would pin one random draw for the life of the
+ * row. The spin happens later, in `resolveChatGenerationConnection`'s
+ * roulette-aware rungs (`resolveConnection`), so every dispatch/retry can
+ * re-draw instead.
+ */
+describe("character bind pointing at a model roulette profile", () => {
+  function seedRouletteLadder(): void {
+    seedProfile({ id: "roul-a", model: "model-a" });
+    seedProfile({ id: "roul-b", model: "model-b" });
+    seedProfile({
+      id: "roul",
+      provider: connectionsSvc.MODEL_ROULETTE_PROVIDER,
+      name: "Roulette",
+      metadata: { connection_roulette: { connection_ids: ["roul-a", "roul-b"] } },
+    });
+    seedProfile({ id: "roul-active", model: "model-active" });
+    seedSetting("activeProfileId", "roul-active");
+  }
+
+  test("resolveEditAndSendConnectionId commits the roulette's OWN stable id", () => {
+    seedRouletteLadder();
+    seedCharacterBind("roul");
+    const committed = connectionsSvc.resolveEditAndSendConnectionId(USER, {}, CHAR_ID);
+    expect(committed).toBe("roul");
+    expect(committed).not.toBe("roul-a");
+    expect(committed).not.toBe("roul-b");
+  });
+
+  test("resolveChatGenerationConnection spins the roulette to a live member", () => {
+    seedRouletteLadder();
+    seedCharacterBind("roul");
+    for (let i = 0; i < 12; i++) {
+      const outcome = outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID }));
+      expect("id" in outcome && ["roul-a", "roul-b"].includes(outcome.id)).toBe(true);
+    }
+  });
+
+  test("the roulette's own id never leaks out of the generation resolver", () => {
+    seedRouletteLadder();
+    seedCharacterBind("roul");
+    // Contrast with the commit resolver above: generation resolution is
+    // roulette-aware, so no outcome is ever the roulette profile itself.
+    const outcomes = Array.from({ length: 12 }, () =>
+      outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })));
+    expect(outcomes.every((outcome) => "id" in outcome && outcome.id !== "roul")).toBe(true);
   });
 });
 

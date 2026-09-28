@@ -116,6 +116,7 @@
     "connectionBindChatTooltip": "Épinglée à cette discussion — la génération utilise toujours cette connexion.",
     "connectionBindCharTooltip": "Liée à ce personnage — la génération utilise toujours cette connexion.",
     "connectionBindHint": "Cette discussion est liée à {{name}}. Choisir une autre connexion ne change que la connexion globale.",
+    "connectionBindHintCharacter": "Ce personnage est lié à {{name}}. Choisir une autre connexion ne change que la connexion globale.",
     "groupSettings": "Paramètres de groupe",
     "chatSettings": "Paramètres de discussion",
     "convertToGroupChat": "Convertir en discussion de groupe",

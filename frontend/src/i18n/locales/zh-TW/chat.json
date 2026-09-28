@@ -116,6 +116,7 @@
     "connectionBindChatTooltip": "已綁定到此聊天 — 生成始終使用此連接。",
     "connectionBindCharTooltip": "已綁定到此角色 — 生成始終使用此連接。",
     "connectionBindHint": "此聊天已綁定到 {{name}}。選擇其他連接只會更改全域連接。",
+    "connectionBindHintCharacter": "此角色已綁定到 {{name}}。選擇其他連接只會更改全域連接。",
     "groupSettings": "群組設置",
     "chatSettings": "聊天設置",
     "convertToGroupChat": "轉為群聊",

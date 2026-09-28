@@ -5,7 +5,13 @@ import type { ConnectionProfile } from '@/types/api'
 export type EffectiveConnectionSource = 'chat' | 'character' | null
 
 export interface EffectiveChatConnection {
-  /** The connection generation will actually use for the active chat. */
+  /**
+   * The connection generation will actually use for the active chat.
+   * Display-level truth: server-only rungs (a committed Edit-and-Send
+   * connection, the `editAndSendAlwaysUseActiveConnection` opt-in, and the
+   * acting-chain fallback when nothing above resolves) can still differ at
+   * generation time.
+   */
   effectiveConnectionId: string | null
   /** Which binding (chat pin / character bind) produced the effective id. */
   overrideSource: EffectiveConnectionSource

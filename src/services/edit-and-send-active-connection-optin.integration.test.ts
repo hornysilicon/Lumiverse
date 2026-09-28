@@ -639,3 +639,52 @@ describe("the Edit-and-Send flow starts on the acting connection", () => {
     });
   }
 });
+
+// ── Character bind wiring — the commit forwards chat.character_id ───────────
+
+/**
+ * The character-bind resolver units are covered elsewhere with an explicitly
+ * passed `characterId`; these cases pin the WIRING: `chats.service.editAndSend`
+ * really forwards the chat's `character_id` into
+ * `resolveEditAndSendConnectionId`, so a seeded character bind lands in
+ * `generation_outbox.connection_id` and survives into the dispatched
+ * `startGeneration` — with no chat pin and no opt-in involved.
+ */
+describe("an Edit-and-Send commit with a character bind", () => {
+  test("commits the bind onto generation_outbox.connection_id and dispatches on it", async () => {
+    // No quickToolbarSettings row (opt-in off), no chat pin: only the bind.
+    seedSetting(`characterConnection:char-int`, BOUND);
+    const observed = observeRealDispatches();
+
+    seedChat("char-bind-commit");
+    seedUserMessage("char-bind-commit");
+    const requestId = commitEditAndSend("char-bind-commit", false);
+
+    // The commit itself recorded the bind, not the active profile.
+    expect(dispatcher.getGenerationOutboxByRequest(USER, "char-bind-commit", requestId)?.connection_id)
+      .toBe(BOUND);
+
+    // And the dispatch forwards it verbatim: the dispatcher's options bag
+    // carries the committed id, the real resolver ladder confirms it, and the
+    // pool registers the bound profile's model.
+    const row = await dispatcher.dispatchEditAndSendRequest(USER, "char-bind-commit", requestId);
+    expect(observed).toEqual([
+      {
+        options: { origin: "edit_and_send", connectionId: BOUND },
+        connectionId: BOUND,
+        model: "model-bound",
+      },
+    ]);
+    expect(row?.status).toBe("running");
+  });
+
+  test("a group chat skips the bind at commit and lands on the acting chain", () => {
+    seedSetting(`characterConnection:char-int`, BOUND);
+    seedChat("char-bind-group", { group: true });
+    seedUserMessage("char-bind-group");
+    const requestId = commitEditAndSend("char-bind-group", false);
+
+    expect(dispatcher.getGenerationOutboxByRequest(USER, "char-bind-group", requestId)?.connection_id)
+      .toBe(ACTIVE);
+  });
+});

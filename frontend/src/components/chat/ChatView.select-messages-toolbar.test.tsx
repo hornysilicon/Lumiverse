@@ -488,12 +488,15 @@ describe('ChatView bound connection pill', () => {
     expect(source).toContain("useStore.getState().openDrawer('connections')")
     expect(source).toMatch(/connectionOverrideSource === 'chat' \? <Pin size=\{12\} \/> : <Link2 size=\{12\} \/>/)
     // The pill rides the existing chat_top_dock mount: its own markup must not
-    // introduce a new data-spindle-mount, and the file-wide mount count stays
-    // at the pre-pill baseline.
-    const pillStart = source.indexOf('styles.connectionPill')
-    const pillMarkup = source.slice(pillStart, source.indexOf('</button>', pillStart))
-    expect(pillMarkup).not.toContain('data-spindle-mount')
-    expect(source.match(/data-spindle-mount=/g)?.length ?? 0).toBe(11)
+    // introduce a new data-spindle-mount. Scoped to the nativeDockActions
+    // subtree (rendered DOM, not file-wide source) so unrelated future mounts
+    // elsewhere in ChatView cannot break this tripwire.
+    const { nativeGroup } = renderPill(pillState({
+      profiles: [connectionProfile('pinned', 'Pinned Conn'), connectionProfile('active', 'Active Conn')],
+      activeProfileId: 'active',
+      activeChatMetadata: { connection_profile_id: 'pinned' },
+    }))
+    expect(nativeGroup.querySelectorAll('[data-spindle-mount]').length).toBe(0)
   })
 })
 

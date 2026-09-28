@@ -116,6 +116,7 @@
     "connectionBindChatTooltip": "Fissata a questa chat — la generazione usa sempre questa connessione.",
     "connectionBindCharTooltip": "Collegata a questo personaggio — la generazione usa sempre questa connessione.",
     "connectionBindHint": "Questa chat è collegata a {{name}}. Scegliere un'altra connessione cambia solo quella globale.",
+    "connectionBindHintCharacter": "Questo personaggio è collegato a {{name}}. Scegliere un'altra connessione cambia solo quella globale.",
     "groupSettings": "Impostazioni gruppo",
     "chatSettings": "Impostazioni chat",
     "convertToGroupChat": "Converti in chat di gruppo",

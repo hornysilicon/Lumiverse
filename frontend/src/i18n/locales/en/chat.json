@@ -147,6 +147,7 @@
     "connectionBindChatTooltip": "Pinned to this chat — generation always uses this connection.",
     "connectionBindCharTooltip": "Bound to this character — generation always uses this connection.",
     "connectionBindHint": "This chat is bound to {{name}}. Choosing another connection only changes the global one.",
+    "connectionBindHintCharacter": "This character is bound to {{name}}. Choosing another connection only changes the global one.",
     "groupSettings": "Group Settings",
     "chatSettings": "Chat Settings",
     "promptVariables": "Prompt Variables",
