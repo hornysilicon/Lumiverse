@@ -461,6 +461,192 @@ describe("resolveChatGenerationConnection — the preferActiveConnection ladder"
   });
 });
 
+// ── resolveChatGenerationConnection — the character bind ("bind to char") rung ──
+
+const CHAR_ID = "char-acting";
+
+/** Seed a `characterConnection:{characterId}` settings row (the raw storage shape). */
+function seedCharacterBind(connectionId: string, characterId: string = CHAR_ID): void {
+  seedSetting(`characterConnection:${characterId}`, connectionId);
+}
+
+describe("resolveChatGenerationConnection — the character bind rung", () => {
+  test("a live character bind beats the requested id and the acting connection", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    // Requested id present: the bind still outranks it (rung 4 above rung 5).
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, "default", { characterId: CHAR_ID })))
+      .toEqual({ id: "bound", model: "model-bound" });
+    // No requested id: the bind outranks the active profile too.
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "bound", model: "model-bound" });
+  });
+
+  test("a chat pin beats the character bind", () => {
+    seedLadder();
+    seedCharacterBind("active");
+    expect(outcomeOf(() => resolveChatConnection(
+      USER,
+      { connection_profile_id: "bound" },
+      undefined,
+      { characterId: CHAR_ID },
+    ))).toEqual({ id: "bound", model: "model-bound" });
+  });
+
+  test("metadata.group === true skips the character bind entirely", () => {
+    // Group precedent: preset-profile character bindings are skipped in group
+    // chats because per-member bindings would be ambiguous.
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(outcomeOf(() => resolveChatConnection(USER, { group: true }, "default", { characterId: CHAR_ID })))
+      .toEqual({ id: "default", model: "model-default" });
+    expect(outcomeOf(() => resolveChatConnection(USER, { group: true }, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+
+  test("a bind naming a deleted connection falls through to requested/active", () => {
+    seedLadder();
+    seedCharacterBind("conn-deleted-never-existed");
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, "default", { characterId: CHAR_ID })))
+      .toEqual({ id: "default", model: "model-default" });
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+
+  test("the chat-pin connection_model override is never applied to a character bind", () => {
+    // A character binding pins a CONNECTION, never a model: the override is
+    // keyed to the chat pin (`boundConnection`) and must not travel.
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(outcomeOf(() => resolveChatConnection(
+      USER,
+      { connection_model: BINDING_MODEL_OVERRIDE },
+      undefined,
+      { characterId: CHAR_ID },
+    ))).toEqual({ id: "bound", model: "model-bound" });
+  });
+
+  test("without opts.characterId the rung is inert (every pre-existing caller)", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, "default")))
+      .toEqual({ id: "default", model: "model-default" });
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, {})))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+});
+
+// ── resolveEditAndSendConnectionId — the character bind mirror rung ─────────
+
+describe("resolveEditAndSendConnectionId — the character bind rung", () => {
+  test("a live character bind beats the acting chain", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {}, CHAR_ID)).toBe("bound");
+  });
+
+  test("a chat pin beats the character bind", () => {
+    seedLadder();
+    seedCharacterBind("active");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(
+      USER,
+      { connection_profile_id: "bound" },
+      CHAR_ID,
+    )).toBe("bound");
+  });
+
+  test("a group chat skips the character bind and lands on the acting chain", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, { group: true }, CHAR_ID))
+      .toBe("active");
+  });
+
+  test("a bind naming a deleted connection degrades to the acting chain", () => {
+    seedLadder();
+    seedCharacterBind("conn-deleted-never-existed");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {}, CHAR_ID)).toBe("active");
+  });
+
+  test("no characterId (legacy/2-arg callers) leaves resolution unchanged", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {})).toBe("active");
+  });
+});
+
+// ── Character bind storage + deleteConnection cleanup ───────────────────────
+
+describe("character bind helpers and deleteConnection cleanup", () => {
+  test("setCharacterConnectionBind validates character and connection, and get/clear round-trip", async () => {
+    seedLadder();
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBeNull();
+
+    expect(() => connectionsSvc.setCharacterConnectionBind(USER, "char-missing", "bound"))
+      .toThrow("Character not found");
+    expect(() => connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "conn-missing"))
+      .toThrow("Connection not found");
+
+    expect(connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "bound")).toBe("bound");
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBe("bound");
+
+    connectionsSvc.clearCharacterConnectionBind(USER, CHAR_ID);
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBeNull();
+    // Idempotent clear: still fine, still null.
+    connectionsSvc.clearCharacterConnectionBind(USER, CHAR_ID);
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBeNull();
+  });
+
+  test("set/clear emit the user-scoped CHARACTER_CONNECTION_BIND_CHANGED event", () => {
+    seedLadder();
+    const emitted: Array<{ type: unknown; payload: unknown; userId: unknown }> = [];
+    track(spyOn(eventBus, "emit").mockImplementation(((type: unknown, payload: unknown, userId: unknown) => {
+      emitted.push({ type, payload, userId });
+    }) as never));
+
+    connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "bound");
+    connectionsSvc.clearCharacterConnectionBind(USER, CHAR_ID);
+
+    const bindEvents = emitted.filter((e) => e.type === EventType.CHARACTER_CONNECTION_BIND_CHANGED);
+    expect(bindEvents).toEqual([
+      { type: EventType.CHARACTER_CONNECTION_BIND_CHANGED, payload: { characterId: CHAR_ID, connectionId: "bound" }, userId: USER },
+      { type: EventType.CHARACTER_CONNECTION_BIND_CHANGED, payload: { characterId: CHAR_ID, connectionId: null }, userId: USER },
+    ]);
+  });
+
+  test("deleteConnection removes dangling binds, leaves unrelated ones, and never crosses users", async () => {
+    seedLadder();
+    seedProfile({ id: "doomed" });
+    seedProfile({ id: "kept" });
+    getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)")
+      .run("char-other", USER, "Other");
+    getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)")
+      .run("char-foreign", "user:other", "Foreign");
+
+    // bound to the doomed connection, via the service (real storage shape)
+    connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "doomed");
+    // bound to a surviving connection
+    connectionsSvc.setCharacterConnectionBind(USER, "char-other", "kept");
+    // ANOTHER user's bind that happens to name the same doomed id
+    getDb()
+      .query("INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, 1)")
+      .run(`characterConnection:char-foreign`, JSON.stringify("doomed"), "user:other");
+
+    expect(await connectionsSvc.deleteConnection(USER, "doomed")).toBe(true);
+
+    expect({
+      danglingRemoved: connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID),
+      unrelatedKept: connectionsSvc.getCharacterConnectionBind(USER, "char-other"),
+      foreignUserUntouched: connectionsSvc.getCharacterConnectionBind("user:other", "char-foreign"),
+    }).toEqual({ danglingRemoved: null, unrelatedKept: "kept", foreignUserUntouched: "doomed" });
+
+    // A dangling bind (say from a restored backup) still degrades gracefully
+    // in resolution rather than bricking the chat.
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+});
+
 // ── readEditAndSendAlwaysUseActiveConnection — strict `=== true` ────────────
 
 describe("readEditAndSendAlwaysUseActiveConnection — no truthiness coercion", () => {
