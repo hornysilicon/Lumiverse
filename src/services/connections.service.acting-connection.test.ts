@@ -33,6 +33,7 @@ mock.module("../crypto/init", () => ({
 // entry in place, so a live namespace reference would recursively observe the
 // mock instead of the original.
 import * as connectionResolutionModule from "./generation/connection-resolution";
+import type { ResolveChatGenerationConnectionOptions } from "./generation/connection-resolution";
 const realConnectionResolution = { ...connectionResolutionModule };
 
 /**
@@ -46,7 +47,7 @@ const realConnectionResolution = { ...connectionResolutionModule };
  */
 const generationConnectionResolutions: Array<{
   requestedConnectionId?: string;
-  options: realConnectionResolution.ResolveChatGenerationConnectionOptions | undefined;
+  options: ResolveChatGenerationConnectionOptions | undefined;
   resolvedId: string;
 }> = [];
 
@@ -56,7 +57,7 @@ mock.module("./generation/connection-resolution", () => ({
     userId: string,
     metadata: Record<string, any> | null | undefined,
     requestedConnectionId?: string,
-    options?: realConnectionResolution.ResolveChatGenerationConnectionOptions,
+    options?: ResolveChatGenerationConnectionOptions,
   ) => {
     const resolved = realConnectionResolution.resolveChatGenerationConnection(
       userId,
